@@ -1,25 +1,15 @@
 """Source orchestrator ``Task``s from Jira.
 
-This bridges the TS-ported orchestrator (which originally read a JSON backlog) to
-the existing ``agent/`` package, which already talks to Jira through the Atlassian
-MCP server. We reuse that integration instead of duplicating it.
+This bridges the orchestrator's ``Task`` model to the ``graph`` package, which
+talks to Jira through the Atlassian MCP server. We reuse that integration
+instead of duplicating it.
 """
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+from graph.jira import list_tickets, report_back, select_ticket
 
-# The ``agent`` package lives at the repo root (one level above this ``agents``
-# folder). Append it so ``import agent.jira`` resolves without shadowing the
-# local ``agents`` subpackage that is already on sys.path.
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.append(str(_REPO_ROOT))
-
-from agent.jira import list_tickets, report_back, select_ticket  # noqa: E402
-
-from agent_types import Task  # noqa: E402
+from agent_types import Task
 
 # Jira priority names -> the orchestrator's integer priority (lower = higher).
 _PRIORITY_MAP = {"highest": 1, "high": 2, "medium": 3, "low": 4, "lowest": 5}

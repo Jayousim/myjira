@@ -1,18 +1,12 @@
-import asyncio
+"""Python port of ``agents/src/agents/implementer.ts``.
 
-from cursor_sdk import (
-    Agent,
-    AgentOptions,
-    CloudAgentOptions,
-    CloudRepository,
-    CursorAgentError,
-)
-
-from .config import config
-
-
+Implements a single plan step locally using the Anthropic tool-use loop (read /
+write / edit files, run shell commands).
+"""
 
 from __future__ import annotations
+
+import asyncio
 
 from anthropic import Anthropic
 
@@ -23,70 +17,10 @@ from tools.file_tools import FILE_TOOL_DEFINITIONS, execute_file_tool
 from tools.shell_tools import SHELL_TOOL_DEFINITION, execute_shell_tool
 
 ALL_TOOLS = [*FILE_TOOL_DEFINITIONS, SHELL_TOOL_DEFINITION]
-def _build_prompt(ticket: dict, plan: str) -> str:
-    criteria = ticket.get("acceptance_criteria") or []
-    criteria_block = (
-        "\n".join(f"- {c}" for c in criteria) if criteria else "(none specified)"
-    )
-    return (
-        f"Implement Jira ticket {ticket.get('key')} ({ticket.get('issue_type')}).\n\n"
-        f"Summary: {ticket.get('summary')}\n\n"
-        f"Description:\n{ticket.get('description')}\n\n"
-        f"Acceptance criteria:\n{criteria_block}\n\n"
-        f"Approved implementation plan:\n{plan}\n\n"
-        "Implement the change in this repository. Add or update tests that prove the "
-        "fix/feature, run the test suite and build, and make sure they pass. "
-        "Keep the change focused on this ticket. When done, open a pull request whose "
-        f"description references {ticket.get('key')} and summarizes what changed and "
-        "how it was verified."
-    )
 
 
-def _implement_sync(ticket: dict, plan: str) -> dict:
-    config.require("cursor_api_key", "target_repo")
-
-    repo = CloudRepository(
-        url=config.target_repo,
-        starting_ref=config.target_repo_ref,
-    )
-    options = AgentOptions(
-        api_key=config.cursor_api_key,
-        model=config.cursor_model,
-        cloud=CloudAgentOptions(
-            repos=[repo],
-            auto_create_pr=True,
-            skip_reviewer_request=True,
-        ),
-    )
-
-    try:
-        result = Agent.prompt(_build_prompt(ticket, plan), options)
-    except CursorAgentError as err:
-        # Run never started (auth / config / network).
-        return {
-            "ok": False,
-            "stage": "startup",
-            "error": str(err),
-            "retryable": getattr(err, "is_retryable", None),
-        }
-
-    git = result.git
-    pr_url = getattr(git, "pr_url", None) if git else None
-    return {
-        "ok": True,
-        "run_id": result.run_id,
-        "summary": result.result,
-        "pr_url": pr_url,
-        "git": str(git) if git else None,
-    }
-
-
-async def implement_ticket(ticket: dict, plan: str) -> dict:
-    """Run the Cursor cloud coding agent without blocking the event loop."""
-    return await asyncio.to_thread(_implement_sync, ticket, plan)
-
-
-IMPLEMENTER_SYSTEM_PROMPT = f"""You are a senior full-stack developer implementing a single step of a larger plan for the Joyalty coffee loyalty app.
+def build_implementer_system_prompt() -> str:
+    return f"""You are a senior full-stack developer implementing a single step of a larger plan for the Joyalty coffee loyalty app.
 
 {PROJECT_CONVENTIONS}
 
@@ -105,6 +39,9 @@ Rules:
 10. Always include proper imports in new files.
 
 When you are done implementing the step, respond with a final message summarizing what you changed."""
+
+
+IMPLEMENTER_SYSTEM_PROMPT = build_implementer_system_prompt()
 
 
 async def _execute_tool(name: str, tool_input: dict) -> str:

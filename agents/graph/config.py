@@ -22,7 +22,11 @@ class Config:
     # Planning / orchestration model (Anthropic)
     planner_model: str = os.getenv("PLANNER_MODEL", "claude-sonnet-4-6")
 
-    # Cursor SDK (the implementer)
+    # Which implementer the graph uses: "local" (Anthropic tool-use, edits this
+    # repo) or "cloud" (Cursor SDK against a remote target repo).
+    implementer_mode: str = os.getenv("IMPLEMENTER_MODE", "local")
+
+    # Cursor SDK (the cloud implementer)
     cursor_api_key: str | None = os.getenv("CURSOR_API_KEY")
     cursor_model: str = os.getenv("CURSOR_MODEL", "composer-2.5")
 
