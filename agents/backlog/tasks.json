@@ -1,0 +1,9 @@
+[
+  {
+    "id": "feat-001",
+    "title": "Add purchase history screen",
+    "description": "Create a new tab showing the customer's purchase history with dates and item types. Backend: add GET /api/purchase/history/{customerId} endpoint. Frontend: new PurchaseHistory tab with a flat list of past purchases.",
+    "status": "pending",
+    "priority": 1
+  }
+]
