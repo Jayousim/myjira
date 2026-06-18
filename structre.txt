@@ -1,0 +1,7 @@
+main.py            → thin entrypoint: sys.path bootstrap, _parse_args, hand off
+agents/runner.py   → Runner: drives the graph (invoke/interrupt/resume) +
+                     interactive ticket loop + plan/outcome presentation
+agents/graph/      → orchestrator (the flow engine)
+agents/agents/     → planner / implementer / cloud_implementer / fixer
+agents/tools/      → file + shell + git tools
+agents/ui/cli.py   → prompts & styled output primitives

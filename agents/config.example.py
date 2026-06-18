@@ -9,8 +9,9 @@ from pathlib import Path
 # This file lives at <repo>/agents/config.py.
 #   parent       -> <repo>/agents   (mirrors the TS "src" root)
 #   parent.parent-> <repo>          (the project being worked on)
-_HERE = Path(__file__).resolve().parent
 
+#_HERE = Path(__file__).resolve().parent
+_HERE = 'C:/Users/J.Inc/Desktop/Branches/Joyalty'
 
 @dataclass(frozen=True)
 class _Config:

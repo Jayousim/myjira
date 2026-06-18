@@ -14,9 +14,13 @@ class Config:
     jira_api_token: str | None = os.getenv("JIRA_API_TOKEN")
 
     # Which tickets to consider for implementation
+    # Board-agnostic by default: open-sprint issues (Scrum) OR issues not in any
+    # sprint (Kanban / backlog). Override with SPRINT_JQL, ideally scoped to a
+    # project, e.g. "project = PROJ AND statusCategory != Done ORDER BY priority DESC".
     sprint_jql: str = os.getenv(
         "SPRINT_JQL",
-        'sprint in openSprints() AND statusCategory != Done ORDER BY priority DESC',
+        "(sprint in openSprints() OR sprint is EMPTY) AND statusCategory != Done "
+        "ORDER BY priority DESC",
     )
 
     # Planning / orchestration model (Anthropic)

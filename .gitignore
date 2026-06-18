@@ -12,3 +12,7 @@
 .env.production.local
 __pycache__
 
+
+agents/config.py
+
+agents/graph/config.py
