@@ -23,6 +23,18 @@ class Config:
         "ORDER BY priority DESC",
     )
 
+    # Optional project key used to scope the advanced, board-grouped query
+    # (boards -> sprints / backlog / kanban). If unset, all accessible boards
+    # are discovered. e.g. "PROJ".
+    jira_project_key: str | None = os.getenv("JIRA_PROJECT_KEY")
+
+    # JQL fragment applied to issues inside the grouped query (board issues and
+    # backlog). Keep it filter-only; ordering is appended automatically.
+    grouped_issue_jql: str = os.getenv(
+        "GROUPED_ISSUE_JQL",
+        "statusCategory != Done ORDER BY priority DESC",
+    )
+
     # Planning / orchestration model (Anthropic)
     planner_model: str = os.getenv("PLANNER_MODEL", "claude-sonnet-4-6")
 

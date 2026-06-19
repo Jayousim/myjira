@@ -7,9 +7,14 @@ instead of duplicating it.
 
 from __future__ import annotations
 
-from graph.jira import list_tickets, report_back, select_ticket
+from graph.jira import (
+    list_spaces,
+    list_tickets,
+    report_back,
+    select_ticket,
+)
 
-from agent_types import Task
+from agent_types import Board, Epic, Group, Space, Task, Ticket
 
 # Jira priority names -> the orchestrator's integer priority (lower = higher).
 _PRIORITY_MAP = {"highest": 1, "high": 2, "medium": 3, "low": 4, "lowest": 5}
@@ -43,6 +48,76 @@ async def fetch_task_list(limit: int = 20) -> list[Task]:
         )
         for t in tickets
         if t.get("key")
+    ]
+
+
+def _ticket_from_dict(ticket: dict) -> Ticket:
+    return Ticket(
+        key=ticket.get("key", ""),
+        summary=ticket.get("summary", ""),
+        issue_type=ticket.get("issue_type", ""),
+        status=ticket.get("status", ""),
+        status_category=ticket.get("status_category", ""),
+        priority=ticket.get("priority", ""),
+        labels=ticket.get("labels", []) or [],
+        epic_key=ticket.get("epic_key"),
+        epic_name=ticket.get("epic_name"),
+    )
+
+
+def _epic_from_dict(epic: dict) -> Epic:
+    return Epic(
+        name=epic.get("name", ""),
+        key=epic.get("key"),
+        tickets=[_ticket_from_dict(t) for t in epic.get("tickets", []) if t.get("key")],
+    )
+
+
+def _group_from_dict(group: dict) -> Group:
+    return Group(
+        name=group.get("name", ""),
+        group_type=group.get("group_type", "board"),
+        state=group.get("state"),
+        sprint_id=group.get("sprint_id"),
+        epics=[_epic_from_dict(e) for e in group.get("epics", [])],
+    )
+
+
+def _board_from_dict(board: dict) -> Board:
+    return Board(
+        board_id=board.get("board_id", ""),
+        board_name=board.get("board_name", ""),
+        board_type=board.get("board_type", ""),
+        groups=[_group_from_dict(g) for g in board.get("groups", [])],
+    )
+
+
+async def fetch_spaces(
+    per_group_limit: int = 50,
+    project_key: str | None = None,
+    include_closed_sprints: bool = False,
+) -> list[Space]:
+    """Return the full ``space -> board -> group -> epic -> ticket`` hierarchy.
+
+    Maps the nested dicts from :func:`list_spaces` into the typed
+    :class:`Space` model, keeping empty containers so the browser can show the
+    complete structure.
+    """
+    raw_spaces = await list_spaces(
+        per_group_limit=per_group_limit,
+        project_key=project_key,
+        include_closed_sprints=include_closed_sprints,
+    )
+
+    return [
+        Space(
+            space_key=space.get("space_key", ""),
+            space_name=space.get("space_name", ""),
+            space_id=space.get("space_id", ""),
+            boards=[_board_from_dict(b) for b in space.get("boards", [])],
+            loose_groups=[_group_from_dict(g) for g in space.get("loose_groups", [])],
+        )
+        for space in raw_spaces
     ]
 
 

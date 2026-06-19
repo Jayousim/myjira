@@ -8,7 +8,7 @@ import questionary
 from colorama import Fore, Style
 from colorama import init as colorama_init
 
-from agent_types import Plan, StepResult, Task
+from agent_types import Epic, Group, Plan, Space, StepResult, Task, Ticket
 
 # Node/chalk emit UTF-8 natively; the Windows console defaults to cp1252, so
 # force UTF-8 before colorama wraps the streams to keep the box-drawing glyphs.
@@ -82,6 +82,102 @@ async def prompt_task_selection(tasks: list[Task]) -> Task | None:
     if answer == "__exit__" or answer is None:
         return None
     return next((t for t in tasks if t.id == answer), None)
+
+
+def _group_header(group: Group) -> str:
+    """A one-line label for a sprint/backlog/board, e.g. 'Sprint 5 (active) — 3 ticket(s)'."""
+    badge = group.state or group.group_type
+    label = f"{group.name} ({badge})" if badge else group.name
+    return f"{label} \u2014 {group.ticket_count} ticket(s)"
+
+
+def _ticket_label(ticket: Ticket, indent: str) -> str:
+    priority = ticket.priority or "-"
+    return f"{indent}[{priority}] {ticket.summary} ({ticket.key})"
+
+
+def _append_epic_choices(
+    epic: Epic,
+    indent: str,
+    by_key: dict[str, Ticket],
+    choices: list,
+) -> None:
+    # Only show an epic header for real epics; orphan tickets render inline.
+    ticket_indent = indent
+    if not epic.is_orphan_bucket:
+        suffix = f" ({epic.key})" if epic.key else ""
+        choices.append(questionary.Separator(f"{indent}\u25c8 {epic.name}{suffix}"))
+        ticket_indent = indent + "  "
+    for ticket in epic.tickets:
+        by_key[ticket.key] = ticket
+        choices.append(
+            questionary.Choice(_ticket_label(ticket, ticket_indent), value=ticket.key)
+        )
+
+
+async def prompt_space_selection(spaces: list[Space]) -> Space | None:
+    """Step 1 of the browser: pick a space/project. Returns None to exit."""
+    if not spaces:
+        print(_c("No spaces found in Jira.", Fore.YELLOW))
+        return None
+
+    choices: list[questionary.Choice | questionary.Separator] = []
+    for space in spaces:
+        label = (
+            f"{space.space_name or space.space_key} ({space.space_key}) "
+            f"\u2014 {space.ticket_count} ticket(s)"
+        )
+        choices.append(questionary.Choice(label, value=space.space_key))
+    choices.append(questionary.Separator(" "))
+    choices.append(questionary.Choice("Exit", value="__exit__"))
+
+    answer = await questionary.select("Select a space:", choices=choices).ask_async()
+
+    if answer == "__exit__" or answer is None:
+        return None
+    return next((s for s in spaces if s.space_key == answer), None)
+
+
+async def prompt_ticket_in_space(space: Space) -> Ticket | None:
+    """Step 2 of the browser: pick a ticket within one space's tree.
+
+    Renders the board -> group -> epic hierarchy for a single space (so the list
+    stays short and headers don't scroll out of view). Returns None to go back
+    to the space list.
+    """
+    by_key: dict[str, Ticket] = {}
+    choices: list[questionary.Choice | questionary.Separator] = []
+
+    choices.append(
+        questionary.Separator(
+            f"\u2550\u2550 {space.space_name or space.space_key} ({space.space_key})"
+        )
+    )
+    for board in space.boards:
+        choices.append(
+            questionary.Separator(
+                f"  \u2500 {board.board_name or 'Board'} ({board.board_type})"
+            )
+        )
+        for group in board.groups:
+            choices.append(questionary.Separator(f"    \u00b7 {_group_header(group)}"))
+            for epic in group.epics:
+                _append_epic_choices(epic, "      ", by_key, choices)
+    for group in space.loose_groups:
+        choices.append(questionary.Separator(f"  \u00b7 {_group_header(group)}"))
+        for epic in group.epics:
+            _append_epic_choices(epic, "    ", by_key, choices)
+
+    choices.append(questionary.Separator(" "))
+    choices.append(questionary.Choice("\u2190 Back to spaces", value="__back__"))
+
+    answer = await questionary.select(
+        f"Select a ticket in {space.space_key}:", choices=choices
+    ).ask_async()
+
+    if answer == "__back__" or answer is None:
+        return None
+    return by_key.get(answer)
 
 
 async def prompt_continue() -> bool:

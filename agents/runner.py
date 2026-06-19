@@ -15,10 +15,11 @@ from colorama import Fore, Style
 from colorama import init as colorama_init
 from langgraph.types import Command
 
-from agent_types import Task
+from agent_types import Board, Epic, Group, Space, Task
 from config import CONFIG
 from graph.graph import graph
-from jira_source import fetch_task_list
+from jira_source import fetch_spaces, fetch_task_list
+
 from ui.cli import (
     print_banner,
     print_error,
@@ -26,7 +27,9 @@ from ui.cli import (
     prompt_approval,
     prompt_continue,
     prompt_feedback,
+    prompt_space_selection,
     prompt_task_selection,
+    prompt_ticket_in_space,
 )
 
 colorama_init()
@@ -42,6 +45,53 @@ for _stream in (sys.stdout, sys.stderr):
 
 def _gray(text: str) -> str:
     return Fore.LIGHTBLACK_EX + text + Style.RESET_ALL
+
+
+def _filter_groups(groups: list[Group], handled: set[str]) -> list[Group]:
+    """Drop already-handled tickets from each group, keeping empty containers."""
+    result: list[Group] = []
+    for group in groups:
+        epics: list[Epic] = []
+        for epic in group.epics:
+            tickets = [t for t in epic.tickets if t.key not in handled]
+            # Keep real epics as headers even when empty; drop a spent orphan bucket.
+            if tickets or not epic.is_orphan_bucket:
+                epics.append(Epic(name=epic.name, key=epic.key, tickets=tickets))
+        result.append(
+            Group(
+                name=group.name,
+                group_type=group.group_type,
+                state=group.state,
+                sprint_id=group.sprint_id,
+                epics=epics,
+            )
+        )
+    return result
+
+
+def _without_handled(spaces: list[Space], handled: set[str]) -> list[Space]:
+    """Rebuild the space tree without handled tickets (structure preserved)."""
+    result: list[Space] = []
+    for space in spaces:
+        boards = [
+            Board(
+                board_id=board.board_id,
+                board_name=board.board_name,
+                board_type=board.board_type,
+                groups=_filter_groups(board.groups, handled),
+            )
+            for board in space.boards
+        ]
+        result.append(
+            Space(
+                space_key=space.space_key,
+                space_name=space.space_name,
+                space_id=space.space_id,
+                boards=boards,
+                loose_groups=_filter_groups(space.loose_groups, handled),
+            )
+        )
+    return result
 
 
 def _ticket_to_task(ticket: dict) -> Task:
@@ -145,18 +195,65 @@ async def run(task_id: str | None, dry_run: bool, skip_git: bool) -> None:
         await run_ticket(task_id, dry_run, skip_git)
         return
 
-    print(_gray("  Fetching tickets from Jira...\n"))
+    print(_gray("  Fetching tickets from Jira (space / board / sprint / epic)...\n"))
+    spaces: list[Space] = []
+    try:
+        spaces = await fetch_spaces()
+    except Exception as error:  # noqa: BLE001 - surface Jira/MCP errors
+        print(_gray(f"  Hierarchical query unavailable ({error}); falling back to flat list.\n"))
+
+    total = sum(s.ticket_count for s in spaces)
+    if spaces and total:
+        handled: set[str] = set()
+        while True:
+            space = await prompt_space_selection(_without_handled(spaces, handled))
+            if space is None:
+                break  # exit the browser
+
+            # Drill into the chosen space until the user backs out or it empties.
+            while True:
+                current = next(
+                    (
+                        s
+                        for s in _without_handled(spaces, handled)
+                        if s.space_key == space.space_key
+                    ),
+                    None,
+                )
+                if current is None or current.ticket_count == 0:
+                    print(_gray("  No more tickets in this space.\n"))
+                    break
+
+                selected = await prompt_ticket_in_space(current)
+                if selected is None:
+                    break  # back to the space list
+
+                await run_ticket(selected.key, dry_run, skip_git)
+                handled.add(selected.key)
+
+                if len(handled) >= total:
+                    print(Fore.GREEN + "\n  No more tickets in the list!\n" + Style.RESET_ALL)
+                    print(_gray("\n  Goodbye!\n"))
+                    return
+
+                if not await prompt_continue():
+                    print(_gray("\n  Goodbye!\n"))
+                    return
+
+        print(_gray("\n  Goodbye!\n"))
+        return
+
     try:
         tasks = await fetch_task_list()
     except Exception as error:  # noqa: BLE001 - surface Jira/MCP errors
         print_error(f"Could not fetch tickets from Jira: {error}")
         sys.exit(1)
 
-    handled: set[str] = set()
+    handled = set()
     continue_loop = True
     while continue_loop:
-        remaining = [t for t in tasks if t.id not in handled]
-        selected = await prompt_task_selection(remaining)
+        remaining_tasks = [t for t in tasks if t.id not in handled]
+        selected = await prompt_task_selection(remaining_tasks)
 
         if not selected:
             break
