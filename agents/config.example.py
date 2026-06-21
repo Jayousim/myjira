@@ -19,9 +19,10 @@ _HERE = 'C:/Users/J.Inc/Desktop/Branches/Joyalty/agents'
 
 @dataclass(frozen=True)
 class _Config:
-    anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
-    planner_model: str = "claude-opus-4-8"
-    implementer_model: str = "claude-opus-4-8"
+    # "provider:model" strings consumed by llm.build_chat_model, e.g.
+    # "anthropic:claude-opus-4-8", "openai:gpt-4o", "google_genai:gemini-1.5-pro".
+    planner_model: str = os.getenv("PLANNER_MODEL", "anthropic:claude-opus-4-8")
+    implementer_model: str = os.getenv("IMPLEMENTER_MODEL", "anthropic:claude-opus-4-8")
     project_root: Path = _HERE.parent
     max_iterations_per_step: int = 10
     max_fix_attempts: int = 3

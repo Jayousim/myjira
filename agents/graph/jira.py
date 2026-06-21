@@ -1,9 +1,10 @@
 import json
 import re
 
-from langchain_anthropic import ChatAnthropic
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
+
+from llm import build_chat_model
 
 from .config import config
 
@@ -13,7 +14,7 @@ async def _jira_run(instruction: str) -> str:
     config.require("jira_url", "jira_username", "jira_api_token")
     client = MultiServerMCPClient(config.mcp_config())
     tools = await client.get_tools()
-    model = ChatAnthropic(model=config.planner_model)
+    model = build_chat_model(config.planner_model)
     agent = create_react_agent(model, tools)
     result = await agent.ainvoke({"messages": [{"role": "user", "content": instruction}]})
     return result["messages"][-1].content
@@ -547,6 +548,78 @@ async def select_ticket(ticket_key: str | None = None) -> dict:
         )
     raw = await _jira_run(instruction)
     return _extract_json(raw)
+
+
+def _created_issue(payload, *, fallback_summary: str = "") -> dict:
+    """Normalize the ``jira_create_issue`` payload into ``{key, url, summary}``.
+
+    The Atlassian MCP server returns the new issue either at the top level or
+    nested under an ``issue`` key, so probe both. When no browse URL is present
+    we synthesize one from ``JIRA_URL`` and the issue key.
+    """
+    data = payload if isinstance(payload, dict) else {}
+    issue = data.get("issue") if isinstance(data.get("issue"), dict) else data
+
+    key = issue.get("key") or data.get("key") or ""
+    url = (
+        issue.get("url")
+        or issue.get("self")
+        or data.get("url")
+        or (f"{(config.jira_url or '').rstrip('/')}/browse/{key}" if key else "")
+    )
+    return {
+        "key": key,
+        "url": url,
+        "summary": issue.get("summary") or data.get("summary") or fallback_summary,
+    }
+
+
+async def create_ticket(
+    *,
+    project_key: str,
+    summary: str,
+    issue_type: str = "Task",
+    description: str = "",
+    priority: str | None = None,
+    labels: list[str] | None = None,
+    epic_key: str | None = None,
+    assignee: str | None = None,
+    components: str | None = None,
+) -> dict:
+    """Create a new Jira issue via the Atlassian MCP ``jira_create_issue`` tool.
+
+    ``priority``, ``labels`` and ``epic_key`` are folded into the tool's
+    ``additional_fields`` JSON string. The epic link is sent as ``parent`` (the
+    portable form that works for team-managed projects and any issue type).
+    Returns a normalized ``{key, url, summary}`` dict.
+    """
+    config.require("jira_url", "jira_username", "jira_api_token")
+    tools = await _jira_tools()
+
+    additional: dict = {}
+    if priority:
+        additional["priority"] = {"name": priority}
+    if labels:
+        additional["labels"] = labels
+    if epic_key:
+        additional["parent"] = epic_key
+
+    kwargs: dict = {
+        "project_key": project_key,
+        "summary": summary,
+        "issue_type": issue_type,
+    }
+    if description:
+        kwargs["description"] = description
+    if assignee:
+        kwargs["assignee"] = assignee
+    if components:
+        kwargs["components"] = components
+    if additional:
+        kwargs["additional_fields"] = json.dumps(additional)
+
+    payload = await _call_tool(tools, "jira_create_issue", **kwargs)
+    return _created_issue(payload, fallback_summary=summary)
 
 
 async def report_back(ticket_key: str, comment: str, transition_to: str | None = None) -> str:

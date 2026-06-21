@@ -35,10 +35,12 @@ class Config:
         "statusCategory != Done ORDER BY priority DESC",
     )
 
-    # Planning / orchestration model (Anthropic)
-    planner_model: str = os.getenv("PLANNER_MODEL", "claude-sonnet-4-6")
+    # Planning / orchestration model as a "provider:model" string consumed by
+    # llm.build_chat_model, e.g. "anthropic:claude-sonnet-4-6", "openai:gpt-4o",
+    # "google_genai:gemini-1.5-pro".
+    planner_model: str = os.getenv("PLANNER_MODEL", "anthropic:claude-sonnet-4-6")
 
-    # Which implementer the graph uses: "local" (Anthropic tool-use, edits this
+    # Which implementer the graph uses: "local" (LangChain tool-use, edits this
     # repo) or "cloud" (Cursor SDK against a remote target repo).
     implementer_mode: str = os.getenv("IMPLEMENTER_MODE", "local")
 

@@ -8,6 +8,7 @@ instead of duplicating it.
 from __future__ import annotations
 
 from graph.jira import (
+    create_ticket,
     list_spaces,
     list_tickets,
     report_back,
@@ -138,3 +139,25 @@ async def report_status(
 ) -> str:
     """Post a comment (and optionally transition) back to the Jira ticket."""
     return await report_back(ticket_key, comment, transition_to=transition_to)
+
+
+async def create_task(
+    *,
+    project_key: str,
+    summary: str,
+    issue_type: str = "Task",
+    description: str = "",
+    priority: str | None = None,
+    labels: list[str] | None = None,
+    epic_key: str | None = None,
+) -> dict:
+    """Create a new Jira ticket and return ``{key, url, summary}``."""
+    return await create_ticket(
+        project_key=project_key,
+        summary=summary,
+        issue_type=issue_type,
+        description=description,
+        priority=priority,
+        labels=labels,
+        epic_key=epic_key,
+    )

@@ -17,16 +17,23 @@ from langgraph.types import Command
 
 from agent_types import Board, Epic, Group, Space, Task
 from config import CONFIG
+from graph.config import config as jira_config
 from graph.graph import graph
-from jira_source import fetch_spaces, fetch_task_list
+from jira_source import create_task, fetch_spaces, fetch_task_list
+from llm import missing_provider_keys
 
 from ui.cli import (
+    CREATE_TICKET,
     print_banner,
+    print_created_ticket,
     print_error,
     print_task,
     prompt_approval,
+    prompt_confirm_create,
     prompt_continue,
     prompt_feedback,
+    prompt_implement_new_ticket,
+    prompt_new_ticket,
     prompt_space_selection,
     prompt_task_selection,
     prompt_ticket_in_space,
@@ -174,13 +181,49 @@ async def run_ticket(ticket_key: str, dry_run: bool, skip_git: bool) -> None:
     _print_outcome(state)
 
 
-async def run(task_id: str | None, dry_run: bool, skip_git: bool) -> None:
+async def create_ticket_flow(dry_run: bool, skip_git: bool) -> str | None:
+    """Collect details, create a Jira ticket, and optionally run it immediately.
+
+    Returns the created issue key (so the browser can mark it handled) or
+    ``None`` if the user cancelled or creation failed.
+    """
+    details = await prompt_new_ticket(jira_config.jira_project_key)
+    if not details:
+        return None
+
+    if not await prompt_confirm_create(details):
+        print(_gray("  Ticket creation cancelled.\n"))
+        return None
+
+    try:
+        result = await create_task(**details)
+    except Exception as error:  # noqa: BLE001 - surface Jira/MCP errors
+        print_error(f"Could not create the ticket in Jira: {error}")
+        return None
+
+    print_created_ticket(result)
+
+    key = result.get("key")
+    if key and await prompt_implement_new_ticket():
+        await run_ticket(key, dry_run, skip_git)
+    return key
+
+
+async def run(task_id: str | None, dry_run: bool, skip_git: bool, create: bool = False) -> None:
     print_banner()
 
-    if not CONFIG.anthropic_api_key:
+    missing_keys = missing_provider_keys(
+        CONFIG.planner_model, CONFIG.implementer_model, jira_config.planner_model
+    )
+    if missing_keys:
         print_error(
-            "ANTHROPIC_API_KEY is not set. Export it as an environment variable:\n"
-            "  export ANTHROPIC_API_KEY=sk-ant-..."
+            "Missing API key(s) for the configured models: "
+            + ", ".join(missing_keys)
+            + ".\n  Set them as environment variables (e.g. in your .env), one per "
+            "provider you use:\n"
+            "    ANTHROPIC_API_KEY=sk-ant-...\n"
+            "    OPENAI_API_KEY=sk-...\n"
+            "    GOOGLE_API_KEY=..."
         )
 
     print(_gray(f"  Project root: {CONFIG.project_root}"))
@@ -193,6 +236,12 @@ async def run(task_id: str | None, dry_run: bool, skip_git: bool) -> None:
     # A specific key skips the interactive browser and runs that ticket directly.
     if task_id:
         await run_ticket(task_id, dry_run, skip_git)
+        return
+
+    # --create jumps straight into the new-ticket flow, no browsing.
+    if create:
+        await create_ticket_flow(dry_run, skip_git)
+        print(_gray("\n  Goodbye!\n"))
         return
 
     print(_gray("  Fetching tickets from Jira (space / board / sprint / epic)...\n"))
@@ -209,6 +258,11 @@ async def run(task_id: str | None, dry_run: bool, skip_git: bool) -> None:
             space = await prompt_space_selection(_without_handled(spaces, handled))
             if space is None:
                 break  # exit the browser
+            if space == CREATE_TICKET:
+                key = await create_ticket_flow(dry_run, skip_git)
+                if key:
+                    handled.add(key)
+                continue  # back to the space list
 
             # Drill into the chosen space until the user backs out or it empties.
             while True:
@@ -257,6 +311,11 @@ async def run(task_id: str | None, dry_run: bool, skip_git: bool) -> None:
 
         if not selected:
             break
+
+        if selected == CREATE_TICKET:
+            await create_ticket_flow(dry_run, skip_git)
+            continue_loop = await prompt_continue()
+            continue
 
         await run_ticket(selected.id, dry_run, skip_git)
         handled.add(selected.id)

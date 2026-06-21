@@ -6,13 +6,12 @@ write / edit files, run shell commands).
 
 from __future__ import annotations
 
-import asyncio
-
-from anthropic import Anthropic
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from agent_types import PlanStep, StepResult
 from config import CONFIG
 from context.project_map import PROJECT_CONVENTIONS
+from llm import build_chat_model, message_text, to_openai_tools
 from tools.file_tools import FILE_TOOL_DEFINITIONS, execute_file_tool
 from tools.shell_tools import SHELL_TOOL_DEFINITION, execute_shell_tool
 
@@ -61,7 +60,9 @@ def _summarize_input(tool_input: dict) -> str:
 
 
 async def implement_step(step: PlanStep, plan_summary: str) -> StepResult:
-    client = Anthropic(api_key=CONFIG.anthropic_api_key)
+    model = build_chat_model(CONFIG.implementer_model, max_tokens=8192).bind_tools(
+        to_openai_tools(ALL_TOOLS)
+    )
     files_changed: list[str] = []
 
     user_message = f"""## Current Step ({step.step_number})
@@ -76,23 +77,19 @@ async def implement_step(step: PlanStep, plan_summary: str) -> StepResult:
 
 Please implement this step now. Start by reading any existing files you need to understand, then make the necessary changes."""
 
-    messages: list[dict] = [{"role": "user", "content": user_message}]
+    messages: list = [
+        SystemMessage(content=IMPLEMENTER_SYSTEM_PROMPT),
+        HumanMessage(content=user_message),
+    ]
 
     for iteration in range(CONFIG.max_iterations_per_step):
         print(f"    iteration {iteration + 1}/{CONFIG.max_iterations_per_step}")
 
-        response = await asyncio.to_thread(
-            client.messages.create,
-            model=CONFIG.implementer_model,
-            max_tokens=8192,
-            system=IMPLEMENTER_SYSTEM_PROMPT,
-            tools=ALL_TOOLS,
-            messages=messages,
-        )
+        response = await model.ainvoke(messages)
+        messages.append(response)
 
-        if response.stop_reason == "end_turn":
-            text_block = next((c for c in response.content if c.type == "text"), None)
-            message = text_block.text if text_block else "Step completed."
+        if not response.tool_calls:
+            message = message_text(response) or "Step completed."
             return StepResult(
                 step_number=step.step_number,
                 success=True,
@@ -100,39 +97,29 @@ Please implement this step now. Start by reading any existing files you need to 
                 files_changed=list(dict.fromkeys(files_changed)),
             )
 
-        if response.stop_reason == "tool_use":
-            tool_use_blocks = [c for c in response.content if c.type == "tool_use"]
-            messages.append({"role": "assistant", "content": response.content})
+        for call in response.tool_calls:
+            name = call["name"]
+            args = call["args"]
+            print(f"      \u2192 {name}({_summarize_input(args)})")
+            try:
+                result = await _execute_tool(name, args)
 
-            tool_results: list[dict] = []
-            for block in tool_use_blocks:
-                print(f"      \u2192 {block.name}({_summarize_input(block.input)})")
-                try:
-                    result = await _execute_tool(block.name, block.input)
+                if name in ("write_file", "edit_file"):
+                    files_changed.append(args["path"])
 
-                    if block.name in ("write_file", "edit_file"):
-                        files_changed.append(block.input["path"])
-
-                    tool_results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": result[:50_000],
-                        }
+                messages.append(
+                    ToolMessage(content=result[:50_000], tool_call_id=call["id"])
+                )
+            except Exception as error:  # noqa: BLE001 - mirror TS catch
+                err_msg = str(error)
+                print(f"      \u2717 {name} error: {err_msg[:100]}")
+                messages.append(
+                    ToolMessage(
+                        content=f"Error: {err_msg}",
+                        tool_call_id=call["id"],
+                        status="error",
                     )
-                except Exception as error:  # noqa: BLE001 - mirror TS catch
-                    err_msg = str(error)
-                    print(f"      \u2717 {block.name} error: {err_msg[:100]}")
-                    tool_results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": f"Error: {err_msg}",
-                            "is_error": True,
-                        }
-                    )
-
-            messages.append({"role": "user", "content": tool_results})
+                )
 
     return StepResult(
         step_number=step.step_number,

@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 
-from anthropic import Anthropic
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent_types import Plan, PlanStep, Task
 from config import CONFIG
 from context.gatherer import gather_context
 from context.project_map import PROJECT_CONVENTIONS
+from llm import build_chat_model, message_text
 
 PLANNER_SYSTEM_PROMPT = f"""You are a senior full-stack architect planning implementation steps for the Joyalty coffee loyalty app.
 
@@ -53,7 +53,7 @@ def _to_plan_step(raw: dict) -> PlanStep:
 
 
 async def generate_plan(task: Task) -> Plan:
-    client = Anthropic(api_key=CONFIG.anthropic_api_key)
+    model = build_chat_model(CONFIG.planner_model, max_tokens=4096)
     context = await gather_context(task.description)
 
     context_block = "\n\n".join(
@@ -75,19 +75,17 @@ async def generate_plan(task: Task) -> Plan:
 
 Please produce a step-by-step implementation plan as JSON."""
 
-    response = await asyncio.to_thread(
-        client.messages.create,
-        model=CONFIG.planner_model,
-        max_tokens=4096,
-        system=PLANNER_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
+    response = await model.ainvoke(
+        [
+            SystemMessage(content=PLANNER_SYSTEM_PROMPT),
+            HumanMessage(content=user_message),
+        ]
     )
 
-    text_content = next((c for c in response.content if c.type == "text"), None)
-    if text_content is None:
+    json_str = message_text(response)
+    if not json_str:
         raise RuntimeError("Planner returned no text content")
 
-    json_str = text_content.text.strip()
     fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", json_str)
     if fence_match:
         json_str = fence_match.group(1).strip()

@@ -66,19 +66,22 @@ async def prompt_feedback() -> str:
     return feedback or ""
 
 
-async def prompt_task_selection(tasks: list[Task]) -> Task | None:
+async def prompt_task_selection(tasks: list[Task]) -> Task | str | None:
     if not tasks:
         print(_c("No pending tasks in the backlog.", Fore.YELLOW))
-        return None
 
-    choices = [
+    choices: list[questionary.Choice | questionary.Separator] = [
         questionary.Choice(f"[{t.priority}] {t.title} ({t.id})", value=t.id)
         for t in tasks
     ]
+    choices.append(questionary.Separator(" "))
+    choices.append(questionary.Choice("\u002b Create a new ticket", value=CREATE_TICKET))
     choices.append(questionary.Choice("Exit", value="__exit__"))
 
     answer = await questionary.select("Select a task to work on:", choices=choices).ask_async()
 
+    if answer == CREATE_TICKET:
+        return CREATE_TICKET
     if answer == "__exit__" or answer is None:
         return None
     return next((t for t in tasks if t.id == answer), None)
@@ -115,11 +118,14 @@ def _append_epic_choices(
         )
 
 
-async def prompt_space_selection(spaces: list[Space]) -> Space | None:
-    """Step 1 of the browser: pick a space/project. Returns None to exit."""
+async def prompt_space_selection(spaces: list[Space]) -> Space | str | None:
+    """Step 1 of the browser: pick a space/project.
+
+    Returns the chosen :class:`Space`, the :data:`CREATE_TICKET` sentinel when
+    the user wants to create a new ticket, or ``None`` to exit.
+    """
     if not spaces:
         print(_c("No spaces found in Jira.", Fore.YELLOW))
-        return None
 
     choices: list[questionary.Choice | questionary.Separator] = []
     for space in spaces:
@@ -129,10 +135,13 @@ async def prompt_space_selection(spaces: list[Space]) -> Space | None:
         )
         choices.append(questionary.Choice(label, value=space.space_key))
     choices.append(questionary.Separator(" "))
+    choices.append(questionary.Choice("\u002b Create a new ticket", value=CREATE_TICKET))
     choices.append(questionary.Choice("Exit", value="__exit__"))
 
     answer = await questionary.select("Select a space:", choices=choices).ask_async()
 
+    if answer == CREATE_TICKET:
+        return CREATE_TICKET
     if answer == "__exit__" or answer is None:
         return None
     return next((s for s in spaces if s.space_key == answer), None)
@@ -182,6 +191,110 @@ async def prompt_ticket_in_space(space: Space) -> Ticket | None:
 
 async def prompt_continue() -> bool:
     return bool(await questionary.confirm("Continue to next task?").ask_async())
+
+
+# The constant for the "create a new ticket" menu entry; the runner matches on
+# this to branch into the create flow instead of selecting a space/ticket.
+CREATE_TICKET = "__create_ticket__"
+
+
+async def prompt_new_ticket(default_project_key: str | None = None) -> dict | None:
+    """Collect the fields for a new Jira ticket.
+
+    Returns a dict suitable for ``jira_source.create_task(**details)`` or
+    ``None`` if the user cancelled (or omitted a required field).
+    """
+    project_key = await questionary.text(
+        "Project key (e.g. PROJ):", default=default_project_key or ""
+    ).ask_async()
+    if not project_key or not project_key.strip():
+        print(_c("  Cancelled \u2014 a project key is required.", Fore.YELLOW))
+        return None
+
+    summary = await questionary.text("Summary (title):").ask_async()
+    if not summary or not summary.strip():
+        print(_c("  Cancelled \u2014 a summary is required.", Fore.YELLOW))
+        return None
+
+    issue_type = await questionary.select(
+        "Issue type:",
+        choices=["Task", "Story", "Bug", "Epic"],
+        default="Task",
+    ).ask_async()
+    if issue_type is None:
+        return None
+
+    description = await questionary.text(
+        "Description (optional, Markdown \u2014 leave empty to skip):",
+        multiline=True,
+    ).ask_async()
+
+    priority = await questionary.select(
+        "Priority:",
+        choices=[
+            questionary.Choice("(leave unset)", value=""),
+            "Highest",
+            "High",
+            "Medium",
+            "Low",
+            "Lowest",
+        ],
+        default="",
+    ).ask_async()
+
+    labels_raw = await questionary.text(
+        "Labels (comma-separated, optional):"
+    ).ask_async()
+    labels = [label.strip() for label in (labels_raw or "").split(",") if label.strip()]
+
+    epic_key = await questionary.text(
+        "Parent epic key (optional, e.g. PROJ-1):"
+    ).ask_async()
+    epic_key = (epic_key or "").strip().upper() or None
+
+    return {
+        "project_key": project_key.strip().upper(),
+        "summary": summary.strip(),
+        "issue_type": issue_type,
+        "description": (description or "").strip(),
+        "priority": priority or None,
+        "labels": labels,
+        "epic_key": epic_key,
+    }
+
+
+async def prompt_confirm_create(details: dict) -> bool:
+    """Show a summary of the pending ticket and ask for final confirmation."""
+    print(_c("\n  New ticket", Style.BRIGHT, Fore.WHITE))
+    print(_c(f"    Project:  {details['project_key']}", Fore.WHITE))
+    print(_c(f"    Type:     {details['issue_type']}", Fore.WHITE))
+    print(_c(f"    Summary:  {details['summary']}", Fore.WHITE))
+    if details.get("priority"):
+        print(_c(f"    Priority: {details['priority']}", Fore.WHITE))
+    if details.get("labels"):
+        print(_c(f"    Labels:   {', '.join(details['labels'])}", Fore.WHITE))
+    if details.get("epic_key"):
+        print(_c(f"    Epic:     {details['epic_key']}", Fore.WHITE))
+    if details.get("description"):
+        print(_c(f"    Description:\n      {details['description']}", Fore.LIGHTBLACK_EX))
+    print()
+    return bool(await questionary.confirm("Create this ticket in Jira?").ask_async())
+
+
+async def prompt_implement_new_ticket() -> bool:
+    return bool(
+        await questionary.confirm("Plan & implement this new ticket now?").ask_async()
+    )
+
+
+def print_created_ticket(result: dict) -> None:
+    key = result.get("key") or "(unknown key)"
+    print(_c(f"\n\u2713 Created {key}", Style.BRIGHT, Fore.GREEN))
+    if result.get("summary"):
+        print(_c(f"  {result['summary']}", Fore.WHITE))
+    if result.get("url"):
+        print(_c(f"  {result['url']}", Fore.CYAN))
+    print()
 
 
 def print_step_start(step_number: int, title: str) -> None:

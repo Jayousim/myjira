@@ -1,9 +1,10 @@
 from typing import Any, Optional, TypedDict
 
-from langchain_anthropic import ChatAnthropic
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
+
+from llm import build_chat_model, message_text
 
 from .config import config
 from .jira import report_back, select_ticket
@@ -189,7 +190,7 @@ async def review_node(state: State) -> State:
         return {"review": ""}
 
     ticket = state["ticket"]
-    model = ChatAnthropic(model=config.planner_model)
+    model = build_chat_model(config.planner_model)
     prompt = (
         "You are a senior reviewer. Given the approved plan and the implementation "
         "summary below, write a brief code review. Call out risks, anything missing "
@@ -201,7 +202,7 @@ async def review_node(state: State) -> State:
         f"Implementation summary:\n{result.get('summary')}"
     )
     resp = await model.ainvoke(prompt)
-    return {"review": resp.content}
+    return {"review": message_text(resp)}
 
 
 async def report_node(state: State) -> State:

@@ -1,8 +1,13 @@
 # Python dependencies for the orchestrator port (mirrors agents/src/*.ts)
 # Install with:  pip install -r requirements.txt
 
-# Anthropic SDK — planner / implementer / fixer agents (@anthropic-ai/sdk)
-anthropic>=0.40.0
+# LangChain — provider-agnostic chat models for every agent role. llm.py
+# dispatches on the "provider:model" string (e.g. "anthropic:...", "openai:...",
+# "google_genai:...") to the matching integration package below.
+langchain-core>=0.3.0
+langchain-anthropic>=0.3.0
+langchain-openai>=0.3.0
+langchain-google-genai>=2.0.0
 
 # Git operations for git_tools (simple-git equivalent)
 GitPython>=3.1.43

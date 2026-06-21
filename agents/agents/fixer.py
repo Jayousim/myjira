@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
-
-from anthropic import Anthropic
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from config import CONFIG
 from context.project_map import PROJECT_CONVENTIONS
+from llm import build_chat_model, to_openai_tools
 from tools.file_tools import FILE_TOOL_DEFINITIONS, execute_file_tool
 from tools.shell_tools import SHELL_TOOL_DEFINITION, execute_shell_tool, run_validation
 
@@ -34,7 +33,9 @@ async def _execute_tool(name: str, tool_input: dict) -> str:
 
 
 async def fix_errors(errors: list[str], files_changed: list[str]) -> dict:
-    client = Anthropic(api_key=CONFIG.anthropic_api_key)
+    model = build_chat_model(CONFIG.implementer_model, max_tokens=4096).bind_tools(
+        to_openai_tools(ALL_TOOLS)
+    )
 
     for attempt in range(CONFIG.max_fix_attempts):
         print(f"    Fix attempt {attempt + 1}/{CONFIG.max_fix_attempts}")
@@ -47,47 +48,35 @@ async def fix_errors(errors: list[str], files_changed: list[str]) -> dict:
 
 Please fix these errors. Read the problematic files first, then make targeted edits."""
 
-        messages: list[dict] = [{"role": "user", "content": user_message}]
+        messages: list = [
+            SystemMessage(content=FIXER_SYSTEM_PROMPT),
+            HumanMessage(content=user_message),
+        ]
 
         for _iter in range(8):
-            response = await asyncio.to_thread(
-                client.messages.create,
-                model=CONFIG.implementer_model,
-                max_tokens=4096,
-                system=FIXER_SYSTEM_PROMPT,
-                tools=ALL_TOOLS,
-                messages=messages,
-            )
+            response = await model.ainvoke(messages)
+            messages.append(response)
 
-            if response.stop_reason == "end_turn":
+            if not response.tool_calls:
                 break
 
-            if response.stop_reason == "tool_use":
-                tool_use_blocks = [c for c in response.content if c.type == "tool_use"]
-                messages.append({"role": "assistant", "content": response.content})
-
-                tool_results: list[dict] = []
-                for block in tool_use_blocks:
-                    print(f"      \u2192 {block.name}({block.input.get('path', '')})")
-                    try:
-                        result = await _execute_tool(block.name, block.input)
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": block.id,
-                                "content": result[:50_000],
-                            }
+            for call in response.tool_calls:
+                name = call["name"]
+                args = call["args"]
+                print(f"      \u2192 {name}({args.get('path', '')})")
+                try:
+                    result = await _execute_tool(name, args)
+                    messages.append(
+                        ToolMessage(content=result[:50_000], tool_call_id=call["id"])
+                    )
+                except Exception as error:  # noqa: BLE001 - mirror TS catch
+                    messages.append(
+                        ToolMessage(
+                            content=f"Error: {error}",
+                            tool_call_id=call["id"],
+                            status="error",
                         )
-                    except Exception as error:  # noqa: BLE001 - mirror TS catch
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": block.id,
-                                "content": f"Error: {error}",
-                                "is_error": True,
-                            }
-                        )
-                messages.append({"role": "user", "content": tool_results})
+                    )
 
         revalidation = await run_validation()
         if revalidation["passed"]:

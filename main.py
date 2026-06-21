@@ -24,11 +24,12 @@ from runner import run  # noqa: E402
 from ui.cli import print_error  # noqa: E402
 
 
-def _parse_args() -> tuple[str | None, bool, bool]:
+def _parse_args() -> tuple[str | None, bool, bool, bool]:
     args = sys.argv[1:]
     task_id: str | None = None
     dry_run = False
     skip_git = False
+    create = False
 
     i = 0
     while i < len(args):
@@ -39,6 +40,8 @@ def _parse_args() -> tuple[str | None, bool, bool]:
             dry_run = True
         elif args[i] == "--skip-git":
             skip_git = True
+        elif args[i] == "--create":
+            create = True
         elif args[i] == "--help":
             print(
                 """
@@ -46,6 +49,7 @@ Usage: python main.py [options]
 
 Options:
   --task <key>   Run a specific Jira ticket by key (e.g. PROJ-123)
+  --create       Create a new Jira ticket, then optionally plan/implement it
   --dry-run      Generate plan only, no implementation
   --skip-git     Skip git branch/commit/PR operations
   --help         Show this help message
@@ -54,13 +58,13 @@ Options:
             sys.exit(0)
         i += 1
 
-    return task_id, dry_run, skip_git
+    return task_id, dry_run, skip_git, create
 
 
 def main() -> None:
-    task_id, dry_run, skip_git = _parse_args()
+    task_id, dry_run, skip_git, create = _parse_args()
     try:
-        asyncio.run(run(task_id, dry_run, skip_git))
+        asyncio.run(run(task_id, dry_run, skip_git, create))
     except Exception as error:  # noqa: BLE001 - top-level guard
         print_error(str(error))
         sys.exit(1)
