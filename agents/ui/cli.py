@@ -66,6 +66,47 @@ async def prompt_feedback() -> str:
     return feedback or ""
 
 
+def print_step_review(payload: dict) -> None:
+    """Render the just-finished step (summary, files, diff) for human review."""
+    step = payload.get("step", {})
+    number = step.get("step_number", "?")
+    total = step.get("total")
+    position = f"{number}/{total}" if total else str(number)
+
+    print(_c(f"\n\u2550\u2550\u2550 Step {position} finished \u2014 review \u2550\u2550\u2550", Style.BRIGHT, Fore.YELLOW))
+    print(_c(f"  {step.get('title', '')}", Style.BRIGHT, Fore.CYAN))
+    if step.get("message"):
+        print(_c(f"  {step['message']}", Fore.WHITE))
+
+    files = step.get("files_changed") or []
+    if files:
+        print(_c(f"\n  Files changed ({len(files)}):", Style.BRIGHT, Fore.WHITE))
+        for path in files:
+            print(_c(f"    \u2022 {path}", Fore.LIGHTBLACK_EX))
+
+    diff = step.get("diff")
+    if diff:
+        print(_c("\n  Diff:", Style.BRIGHT, Fore.WHITE))
+        print(_c(diff, Fore.LIGHTBLACK_EX))
+    print(_c("\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\n", Style.BRIGHT, Fore.YELLOW))
+
+
+async def prompt_step_review(is_last: bool) -> str:
+    """Ask whether to continue to the next step or stop the run here."""
+    continue_label = (
+        "Finish \u2014 this was the last step" if is_last else "Continue \u2014 implement the next step"
+    )
+    answer = await questionary.select(
+        "What would you like to do?",
+        choices=[
+            questionary.Choice(continue_label, value="continue"),
+            questionary.Choice("Stop \u2014 don't implement further steps", value="stop"),
+        ],
+    ).ask_async()
+    # Treat a cancelled prompt (Ctrl-C / None) as "stop" so we don't barrel ahead.
+    return answer or "stop"
+
+
 async def prompt_task_selection(tasks: list[Task]) -> Task | str | None:
     if not tasks:
         print(_c("No pending tasks in the backlog.", Fore.YELLOW))

@@ -27,6 +27,7 @@ from ui.cli import (
     print_banner,
     print_created_ticket,
     print_error,
+    print_step_review,
     print_task,
     prompt_approval,
     prompt_confirm_create,
@@ -35,6 +36,7 @@ from ui.cli import (
     prompt_implement_new_ticket,
     prompt_new_ticket,
     prompt_space_selection,
+    prompt_step_review,
     prompt_task_selection,
     prompt_ticket_in_space,
 )
@@ -127,6 +129,23 @@ def _print_outcome(state: dict) -> None:
                 + f"\n\u2713 Implemented. PR: {result.get('pr_url')}  (run {result.get('run_id')})"
                 + Style.RESET_ALL
             )
+            warnings = result.get("warnings") or []
+            if warnings:
+                print(
+                    Style.BRIGHT
+                    + Fore.YELLOW
+                    + f"\n\u26a0 {len(warnings)} step(s) finished with unresolved "
+                    "validation errors (left for you to fix manually):"
+                    + Style.RESET_ALL
+                )
+                for warning in warnings:
+                    print(
+                        Fore.YELLOW
+                        + f"\n[{warning.get('stage')}] {warning.get('step_title', '')}".rstrip()
+                        + Style.RESET_ALL
+                    )
+                    for error in warning.get("errors", []):
+                        print(error)
         else:
             print(
                 Style.BRIGHT
@@ -145,43 +164,72 @@ def _print_outcome(state: dict) -> None:
         print(Fore.CYAN + f"\nJira updated:\n{state['report']}" + Style.RESET_ALL)
 
 
-async def run_ticket(ticket_key: str, dry_run: bool, skip_git: bool) -> None:
+async def _resume_value_for(payload: dict, dry_run: bool) -> dict | None:
+    """Translate a graph interrupt into the human's resume decision.
+
+    Returns the dict to feed back via ``Command(resume=...)``, or ``None`` to
+    abort the run without resuming (e.g. a dry-run that only wanted the plan).
+    """
+    kind = payload.get("type")
+
+    if kind == "step_review":
+        print_step_review(payload)
+        action = await prompt_step_review(bool(payload.get("step", {}).get("is_last")))
+        return {"action": action}
+
+    # Default / plan_approval: show the plan and collect approve/reject/edit.
+    print_task(_ticket_to_task(payload["ticket"]))
+    _print_plan(payload["plan"])
+
+    if dry_run:
+        print(Fore.CYAN + "\n  Dry run - plan only, no implementation.\n" + Style.RESET_ALL)
+        return None
+
+    decision = await prompt_approval()
+    feedback = ""
+    if decision == "edit":
+        # The graph has no in-session re-plan loop, so feedback is submitted as a
+        # revision request (posted back to the ticket) rather than regenerating
+        # the plan here.
+        feedback = await prompt_feedback()
+    return {"approved": decision == "approve", "feedback": feedback}
+
+
+async def run_ticket(
+    ticket_key: str, dry_run: bool, skip_git: bool, review_steps: bool = False
+) -> None:
     thread = {"configurable": {"thread_id": str(uuid.uuid4())}}
 
     # First leg: select -> plan -> (pauses at the approval interrupt).
     state = await graph.ainvoke(
-        {"ticket_key": ticket_key, "skip_git": skip_git}, config=thread
+        {
+            "ticket_key": ticket_key,
+            "skip_git": skip_git,
+            "review_steps": review_steps,
+        },
+        config=thread,
     )
 
-    interrupts = state.get("__interrupt__")
-    if interrupts:
-        payload = interrupts[0].value
-        print_task(_ticket_to_task(payload["ticket"]))
-        _print_plan(payload["plan"])
+    # The graph can now pause more than once: first at plan approval, then after
+    # each implemented step when --review-steps is on. Keep resuming until it
+    # runs to completion (no more interrupts).
+    while True:
+        interrupts = state.get("__interrupt__")
+        if not interrupts:
+            break
 
-        if dry_run:
-            print(Fore.CYAN + "\n  Dry run - plan only, no implementation.\n" + Style.RESET_ALL)
-            return
+        resume_value = await _resume_value_for(interrupts[0].value, dry_run)
+        if resume_value is None:
+            return  # dry-run: stop after showing the plan
 
-        decision = await prompt_approval()
-        approved = decision == "approve"
-        feedback = ""
-        if decision == "edit":
-            # The graph has no in-session re-plan loop, so feedback is submitted
-            # as a revision request (posted back to the ticket) rather than
-            # regenerating the plan here.
-            feedback = await prompt_feedback()
-
-        # Second leg: resume -> implement -> review -> report.
-        state = await graph.ainvoke(
-            Command(resume={"approved": approved, "feedback": feedback}),
-            config=thread,
-        )
+        state = await graph.ainvoke(Command(resume=resume_value), config=thread)
 
     _print_outcome(state)
 
 
-async def create_ticket_flow(dry_run: bool, skip_git: bool) -> str | None:
+async def create_ticket_flow(
+    dry_run: bool, skip_git: bool, review_steps: bool = False
+) -> str | None:
     """Collect details, create a Jira ticket, and optionally run it immediately.
 
     Returns the created issue key (so the browser can mark it handled) or
@@ -205,11 +253,17 @@ async def create_ticket_flow(dry_run: bool, skip_git: bool) -> str | None:
 
     key = result.get("key")
     if key and await prompt_implement_new_ticket():
-        await run_ticket(key, dry_run, skip_git)
+        await run_ticket(key, dry_run, skip_git, review_steps)
     return key
 
 
-async def run(task_id: str | None, dry_run: bool, skip_git: bool, create: bool = False) -> None:
+async def run(
+    task_id: str | None,
+    dry_run: bool,
+    skip_git: bool,
+    create: bool = False,
+    review_steps: bool = False,
+) -> None:
     print_banner()
 
     missing_keys = missing_provider_keys(
@@ -235,12 +289,12 @@ async def run(task_id: str | None, dry_run: bool, skip_git: bool, create: bool =
 
     # A specific key skips the interactive browser and runs that ticket directly.
     if task_id:
-        await run_ticket(task_id, dry_run, skip_git)
+        await run_ticket(task_id, dry_run, skip_git, review_steps)
         return
 
     # --create jumps straight into the new-ticket flow, no browsing.
     if create:
-        await create_ticket_flow(dry_run, skip_git)
+        await create_ticket_flow(dry_run, skip_git, review_steps)
         print(_gray("\n  Goodbye!\n"))
         return
 
@@ -259,7 +313,7 @@ async def run(task_id: str | None, dry_run: bool, skip_git: bool, create: bool =
             if space is None:
                 break  # exit the browser
             if space == CREATE_TICKET:
-                key = await create_ticket_flow(dry_run, skip_git)
+                key = await create_ticket_flow(dry_run, skip_git, review_steps)
                 if key:
                     handled.add(key)
                 continue  # back to the space list
@@ -282,7 +336,7 @@ async def run(task_id: str | None, dry_run: bool, skip_git: bool, create: bool =
                 if selected is None:
                     break  # back to the space list
 
-                await run_ticket(selected.key, dry_run, skip_git)
+                await run_ticket(selected.key, dry_run, skip_git, review_steps)
                 handled.add(selected.key)
 
                 if len(handled) >= total:
@@ -313,11 +367,11 @@ async def run(task_id: str | None, dry_run: bool, skip_git: bool, create: bool =
             break
 
         if selected == CREATE_TICKET:
-            await create_ticket_flow(dry_run, skip_git)
+            await create_ticket_flow(dry_run, skip_git, review_steps)
             continue_loop = await prompt_continue()
             continue
 
-        await run_ticket(selected.id, dry_run, skip_git)
+        await run_ticket(selected.id, dry_run, skip_git, review_steps)
         handled.add(selected.id)
 
         if len(handled) >= len(tasks):

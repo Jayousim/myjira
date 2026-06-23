@@ -36,6 +36,7 @@ Rules:
 8. When creating Java files, follow the existing package structure: com.joyalty.server.*
 9. When creating TypeScript files, use the existing import patterns and types.
 10. Always include proper imports in new files.
+11. Focus on step, Don't fix redundant imports or code that is not related to the current step.
 
 When you are done implementing the step, respond with a final message summarizing what you changed."""
 

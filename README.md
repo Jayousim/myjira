@@ -137,15 +137,15 @@ python main.py --task PROJ-123 --skip-git
 
 **Ticket browser (space / board / sprint / epic / ticket):**
 
-![CLI — ticket browser](docs/screenshots/cli-ticket-browser.png)
+![CLI — ticket browser](./docs/screenshots/cli-ticket-browser.png)
 
 **Proposed plan + approval gate:**
 
-![CLI — plan approval](docs/screenshots/cli-plan-approval.png)
+![CLI — plan approval](docs/screenshots/cli-plan-approval.jpg)
 
 **Implementation + outcome (PR link, review notes, Jira update):**
 
-![CLI — outcome](docs/screenshots/cli-outcome.png)
+![CLI — outcome](docs/screenshots/cli-outcome.jpg)
 
 ## Roadmap
 

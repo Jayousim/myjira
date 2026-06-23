@@ -24,12 +24,13 @@ from runner import run  # noqa: E402
 from ui.cli import print_error  # noqa: E402
 
 
-def _parse_args() -> tuple[str | None, bool, bool, bool]:
+def _parse_args() -> tuple[str | None, bool, bool, bool, bool]:
     args = sys.argv[1:]
     task_id: str | None = None
     dry_run = False
     skip_git = False
     create = False
+    review_steps = False
 
     i = 0
     while i < len(args):
@@ -42,29 +43,32 @@ def _parse_args() -> tuple[str | None, bool, bool, bool]:
             skip_git = True
         elif args[i] == "--create":
             create = True
+        elif args[i] == "--review-steps":
+            review_steps = True
         elif args[i] == "--help":
             print(
                 """
 Usage: python main.py [options]
 
 Options:
-  --task <key>   Run a specific Jira ticket by key (e.g. PROJ-123)
-  --create       Create a new Jira ticket, then optionally plan/implement it
-  --dry-run      Generate plan only, no implementation
-  --skip-git     Skip git branch/commit/PR operations
-  --help         Show this help message
+  --task <key>     Run a specific Jira ticket by key (e.g. PROJ-123)
+  --create         Create a new Jira ticket, then optionally plan/implement it
+  --dry-run        Generate plan only, no implementation
+  --skip-git       Skip git branch/commit/PR operations
+  --review-steps   Pause for review after each implemented step (continue/stop)
+  --help           Show this help message
 """
             )
             sys.exit(0)
         i += 1
 
-    return task_id, dry_run, skip_git, create
+    return task_id, dry_run, skip_git, create, review_steps
 
 
 def main() -> None:
-    task_id, dry_run, skip_git, create = _parse_args()
+    task_id, dry_run, skip_git, create, review_steps = _parse_args()
     try:
-        asyncio.run(run(task_id, dry_run, skip_git, create))
+        asyncio.run(run(task_id, dry_run, skip_git, create, review_steps))
     except Exception as error:  # noqa: BLE001 - top-level guard
         print_error(str(error))
         sys.exit(1)

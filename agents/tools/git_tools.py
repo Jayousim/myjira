@@ -129,3 +129,35 @@ async def has_uncommitted_changes() -> bool:
         return _get_repo().is_dirty(untracked_files=True)
 
     return await asyncio.to_thread(_check)
+
+
+async def get_step_diff(
+    files_changed: list[str],
+    committed: bool,
+    max_chars: int = 6_000,
+) -> str:
+    """Return a human-readable diff for the changes a step just made.
+
+    When ``committed`` is true the work was committed (branch mode), so we show
+    the most recent commit. Otherwise we show the working-tree diff for the
+    touched files (uncommitted mode). The result is capped so a large diff can't
+    flood the review prompt.
+    """
+
+    def _diff() -> str:
+        repo = _get_repo()
+        try:
+            if committed:
+                text = repo.git.show("HEAD", "--stat", "-p")
+            elif files_changed:
+                text = repo.git.diff("--", *files_changed)
+            else:
+                text = repo.git.diff()
+        except GitCommandError as error:
+            return f"(could not compute diff: {error})"
+        text = text or "(no textual diff — likely new/binary files only)"
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n... (diff truncated)"
+        return text
+
+    return await asyncio.to_thread(_diff)
